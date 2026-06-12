@@ -43,6 +43,10 @@ const MAX_LOCK_DELAY_RESETS = 15;
 // ライン消去のスコア（同時に消した行数ごと。0行・1行・2行・3行・4行）
 const LINE_SCORES = [0, 100, 300, 500, 800];
 
+// 演出の長さ（ms）
+const FLASH_DURATION_MS = 200; // ライン消去の白フラッシュ
+const SHAKE_DURATION_MS = 150; // ハードドロップのぶれ
+
 // ============================================================
 // ゲーム状態（すべての状態をここに集約する）
 // ============================================================
@@ -65,6 +69,8 @@ const gameState = {
   lastTime: 0,            // 前フレームの時刻（rAF の時間管理用）
   dropElapsed: 0,         // 自動落下用にためた経過時間（ms）
   isStarted: false,       // スタートボタンが押されてゲームが始まったか
+  lineFlash: null,        // ライン消去演出 { rows: 消す行, elapsed: 経過ms }
+  shakeElapsed: null,     // ハードドロップぶれ演出の経過ms（null = 演出なし）
 };
 
 // ============================================================
@@ -72,14 +78,19 @@ const gameState = {
 // ============================================================
 
 // CSSピクセルと物理ピクセルの違いを吸収する。
-// 例：DPR=2 のスマホでは内部解像度を2倍にして、描画は2倍に拡大する。
-// こうすると Retina などの高解像度画面でも線が滲まない。
-function setupCanvas(canvas, cssWidth, cssHeight) {
+// CSS で決まった「実際の表示サイズ」に内部解像度を合わせるので、
+// PC で大きく表示しても高解像度スマホでも滲まない。
+// 描画コードは常に「論理サイズ」（盤面なら300×600）の座標のままでよい。
+// ※ 表示サイズは読み込み時に一度だけ測る（ウィンドウサイズを変えたら再読み込み）
+function setupCanvas(canvas, logicalWidth, logicalHeight) {
   const dpr = window.devicePixelRatio || 1;
-  canvas.width = cssWidth * dpr;   // 内部解像度（物理ピクセル）
-  canvas.height = cssHeight * dpr;
+  const rect = canvas.getBoundingClientRect();
+  const displayWidth = rect.width || logicalWidth;
+  const displayHeight = rect.height || logicalHeight;
+  canvas.width = displayWidth * dpr;   // 内部解像度（物理ピクセル）
+  canvas.height = displayHeight * dpr;
   const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);             // 以降は CSS ピクセル感覚で描ける
+  ctx.scale((displayWidth / logicalWidth) * dpr, (displayHeight / logicalHeight) * dpr);
   return ctx;
 }
 
@@ -207,32 +218,42 @@ function lockPiece() {
       }
     }
   }
-  clearLines(); // そろった行があれば消してスコアを加算する
-  spawnPiece();
+  const fullRows = findFullRows();
+  if (fullRows.length === 0) {
+    spawnPiece(); // 消える行がなければすぐ次のテトリミノを出す
+  } else {
+    // 消える行を白く光らせる演出を始める（実際に消すのは200ms後）
+    gameState.currentPiece = null; // 固定済みなので手放す
+    gameState.isAnimating = true;  // 演出中は入力を無視する
+    gameState.lineFlash = { rows: fullRows, elapsed: 0 };
+  }
 }
 
-// そろった行を消して、スコア・レベルを更新する
-function clearLines() {
-  let cleared = 0;
-
-  // 下の行から上に向かって調べる。
-  // 行を消すと上の行が下に詰まってくるので、同じ行番号をもう一度調べ直す
-  for (let row = ROWS - 1; row >= 0; row--) {
-    const isFull = gameState.board[row].every((cell) => cell !== 0);
-    if (isFull) {
-      gameState.board.splice(row, 1);                   // そろった行を取り除く
-      gameState.board.unshift(new Array(COLS).fill(0)); // 一番上に空の行を足す
-      cleared++;
-      row++; // 詰まってきた行を調べ直す
+// そろっている行の番号一覧を返す（上から順）
+function findFullRows() {
+  const rows = [];
+  for (let row = 0; row < ROWS; row++) {
+    if (gameState.board[row].every((cell) => cell !== 0)) {
+      rows.push(row);
     }
   }
+  return rows;
+}
 
-  if (cleared > 0) {
-    gameState.score += LINE_SCORES[cleared];
-    gameState.linesCleared += cleared;
-    // 10ライン消すごとにレベルアップ（0〜9ライン=Lv1、10〜19=Lv2…）
-    gameState.level = Math.floor(gameState.linesCleared / 10) + 1;
+// 行を実際に消して、スコア・レベルを更新する
+function applyLineClear(rows) {
+  // 上の行から順に処理すれば、まだ消していない下の行の番号はずれない
+  // （1行消すたびに一番上へ空行を足すので、その行より下の位置は変わらない）
+  for (const row of rows) {
+    gameState.board.splice(row, 1);                   // そろった行を取り除く
+    gameState.board.unshift(new Array(COLS).fill(0)); // 一番上に空の行を足す
   }
+
+  const cleared = rows.length;
+  gameState.score += LINE_SCORES[cleared];
+  gameState.linesCleared += cleared;
+  // 10ライン消すごとにレベルアップ（0〜9ライン=Lv1、10〜19=Lv2…）
+  gameState.level = Math.floor(gameState.linesCleared / 10) + 1;
 }
 
 // 現在のレベルに応じた自動落下の間隔（レベルが上がるほど速い・最速100ms）
@@ -284,7 +305,7 @@ function softDrop() {
 }
 
 // ハードドロップ：一番下まで一気に落として即固定する
-// （ロック遅延はスキップする仕様。ぶれ演出はステップ5で追加）
+// （ロック遅延はスキップする仕様）
 function hardDrop() {
   const piece = gameState.currentPiece;
   while (!checkCollision(piece.shape, piece.row + 1, piece.col)) {
@@ -292,6 +313,7 @@ function hardDrop() {
   }
   lockPiece();
   gameState.dropElapsed = 0;
+  gameState.shakeElapsed = 0; // 着地の重さを表現するぶれ演出を始める
 }
 
 // 行列を時計回りに90度回転する（転置＋行の反転と同じ結果）
@@ -502,12 +524,41 @@ function drawPreview(ctx, piece) {
   }
 }
 
+// 消える行を白く光らせる（ライン消去演出）
+function drawLineFlash() {
+  if (gameState.lineFlash === null) return;
+  boardCtx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+  for (const row of gameState.lineFlash.rows) {
+    boardCtx.fillRect(0, row * CELL_SIZE, COLS * CELL_SIZE, CELL_SIZE);
+  }
+}
+
 // 1フレーム分の描画をまとめて行う
 function draw() {
+  // ハードドロップのぶれ：盤面全体を縦に小さくゆらす（減衰しながら2往復）
+  let shakeY = 0;
+  if (gameState.shakeElapsed !== null) {
+    const progress = gameState.shakeElapsed / SHAKE_DURATION_MS; // 0→1
+    shakeY = 3 * Math.sin(progress * Math.PI * 4) * (1 - progress);
+  }
+
+  boardCtx.save();
+  boardCtx.translate(0, shakeY);
+
   drawBoard();        // 背景とグリッド
   drawLockedCells();  // 積まれたブロック
   drawGhost();        // ゴースト（落下先の影）
   drawCurrentPiece(); // 落下中のブロック
+  drawLineFlash();    // ライン消去の白フラッシュ
+
+  boardCtx.restore();
+
+  // ゲームオーバー時は盤面全体をグレーアウトする
+  if (gameState.isGameOver) {
+    boardCtx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    boardCtx.fillRect(0, 0, COLS * CELL_SIZE, ROWS * CELL_SIZE);
+  }
+
   drawPreview(nextCtx, gameState.nextPiece);  // NEXT パネル
   drawPreview(holdCtx, gameState.heldPiece);  // HOLD パネル
 }
@@ -695,8 +746,11 @@ function resetGame() {
   gameState.lockDelayElapsed = 0;       // ⑤ ロック遅延・落下の経過時間を初期化
   gameState.lockDelayResets = 0;
   gameState.dropElapsed = 0;
-  gameState.isGameOver = false;         // ⑥ フラグを初期化
+  gameState.isGameOver = false;         // ⑥ フラグ・演出を初期化
   gameState.isPaused = false;
+  gameState.isAnimating = false;
+  gameState.lineFlash = null;
+  gameState.shakeElapsed = null;
   spawnPiece();                         // ⑦ 最初のテトリミノを出す
 }
 
@@ -752,22 +806,41 @@ function update(time) {
     gameState.isStarted && !gameState.isPaused && !gameState.isGameOver;
 
   if (isRunning) {
-    // 経過時間をためて、落下間隔を超えたら1マス落とす
-    gameState.dropElapsed += delta;
-    if (gameState.dropElapsed >= dropInterval()) {
-      gameState.dropElapsed = 0;
-      stepDown();
-    }
-
-    // ロック遅延：着地中だけ経過時間をためて、500msたったら固定する。
-    // 空中にいる間は常に0に戻る（setTimeout を使わず rAF に一本化）
-    if (gameState.currentPiece !== null && isGrounded()) {
-      gameState.lockDelayElapsed += delta;
-      if (gameState.lockDelayElapsed >= LOCK_DELAY_MS) {
-        lockPiece();
+    if (gameState.lineFlash !== null) {
+      // ライン消去演出中：時間だけ進めて、200msたったら実際に消す
+      gameState.lineFlash.elapsed += delta;
+      if (gameState.lineFlash.elapsed >= FLASH_DURATION_MS) {
+        applyLineClear(gameState.lineFlash.rows);
+        gameState.lineFlash = null;
+        gameState.isAnimating = false;
+        spawnPiece();
       }
     } else {
-      gameState.lockDelayElapsed = 0;
+      // 経過時間をためて、落下間隔を超えたら1マス落とす
+      gameState.dropElapsed += delta;
+      if (gameState.dropElapsed >= dropInterval()) {
+        gameState.dropElapsed = 0;
+        stepDown();
+      }
+
+      // ロック遅延：着地中だけ経過時間をためて、500msたったら固定する。
+      // 空中にいる間は常に0に戻る（setTimeout を使わず rAF に一本化）
+      if (gameState.currentPiece !== null && isGrounded()) {
+        gameState.lockDelayElapsed += delta;
+        if (gameState.lockDelayElapsed >= LOCK_DELAY_MS) {
+          lockPiece();
+        }
+      } else {
+        gameState.lockDelayElapsed = 0;
+      }
+    }
+
+    // ハードドロップのぶれ演出：150msで終わる
+    if (gameState.shakeElapsed !== null) {
+      gameState.shakeElapsed += delta;
+      if (gameState.shakeElapsed >= SHAKE_DURATION_MS) {
+        gameState.shakeElapsed = null;
+      }
     }
   }
 

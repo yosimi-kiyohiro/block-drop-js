@@ -53,8 +53,10 @@ body {
 }
 
 #board-canvas {
-  width: 300px;
-  height: 600px;
+  /* PC では画面の高さに合わせて大きく表示する（縦横比 1:2 を維持） */
+  height: min(80vh, 800px);
+  width: auto;
+  aspect-ratio: 1 / 2;
   border: 2px solid #44446a;
   border-radius: 4px;
   background-color: #10101f;
