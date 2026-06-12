@@ -5,3 +5,6 @@ desktop.ini
 
 # 動作検証用の作業フォルダ（ゲーム本体には不要）
 debug-test/
+
+# npm の依存パッケージ（万一ルートで npm install しても上がらないように）
+node_modules/
