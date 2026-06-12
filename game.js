@@ -35,6 +35,11 @@ const TETROMINOES = {
 // 自動落下の間隔（ms）。レベルに応じた加速はステップ4で実装する
 const BASE_DROP_INTERVAL = 1000;
 
+// ロック遅延：着地してから固定までの猶予時間（ms）と、
+// 操作によるリセットの上限回数（無限に粘れないようにする）
+const LOCK_DELAY_MS = 500;
+const MAX_LOCK_DELAY_RESETS = 15;
+
 // ============================================================
 // ゲーム状態（すべての状態をここに集約する）
 // ============================================================
@@ -139,6 +144,8 @@ function spawnPiece() {
   gameState.currentPiece = gameState.nextPiece;
   gameState.nextPiece = createPiece(takeFromBag());
   gameState.hasHeldThisTurn = false; // 新しいターンなのでホールド解禁
+  gameState.lockDelayElapsed = 0;    // ロック遅延も新しいピース用にリセット
+  gameState.lockDelayResets = 0;
   // ※ スポーン位置が埋まっていたらゲームオーバー（ステップ4で実装）
 }
 
@@ -187,13 +194,27 @@ function lockPiece() {
   spawnPiece();
 }
 
-// テトリミノを1マス下に動かす。動けなければ固定する
+// テトリミノが着地しているか（1マス下に動けない状態か）
+function isGrounded() {
+  const piece = gameState.currentPiece;
+  return checkCollision(piece.shape, piece.row + 1, piece.col);
+}
+
+// 着地中に移動・回転できた時、固定までの猶予を延長する。
+// ただしリセットは最大15回まで（無限に粘れないようにする）
+function tryResetLockDelay() {
+  if (isGrounded() && gameState.lockDelayResets < MAX_LOCK_DELAY_RESETS) {
+    gameState.lockDelayElapsed = 0;
+    gameState.lockDelayResets++;
+  }
+}
+
+// テトリミノを1マス下に動かす。
+// 着地していても即固定はしない（固定はロック遅延が判断する）
 function stepDown() {
   const piece = gameState.currentPiece;
   if (!checkCollision(piece.shape, piece.row + 1, piece.col)) {
     piece.row++;
-  } else {
-    lockPiece();
   }
 }
 
@@ -206,6 +227,7 @@ function movePiece(dCol) {
   const piece = gameState.currentPiece;
   if (!checkCollision(piece.shape, piece.row, piece.col + dCol)) {
     piece.col += dCol;
+    tryResetLockDelay(); // 着地中の移動なら固定までの猶予を延長
   }
 }
 
@@ -240,25 +262,55 @@ function rotateMatrix(shape) {
   return rotated;
 }
 
-// テトリミノを回転する。壁際で回転できない時は左右に
-// 少しずらして試す（簡易ウォールキック）
+// テトリミノを回転する。壁際・床の上で回転できない時は
+// 左右や上に少しずらして試す（簡易ウォールキック＋フロアキック）
 function rotatePiece() {
   const piece = gameState.currentPiece;
   if (piece.type === 'O') return; // Oミノは回転しても形が同じ
 
   const rotated = rotateMatrix(piece.shape);
 
-  // ずらして試す量。Iミノは横に長いので2マスずらしも試す
-  const kicks = piece.type === 'I' ? [0, -1, 1, -2, 2] : [0, -1, 1];
+  // ずらして試す量 [行, 列]。行の -1 は「1マス上」（床にめり込む時の逃がし）。
+  // Iミノは長いので2マスずらしも試す
+  const kicks = piece.type === 'I'
+    ? [[0, 0], [0, -1], [0, 1], [0, -2], [0, 2], [-1, 0], [-2, 0]]
+    : [[0, 0], [0, -1], [0, 1], [-1, 0]];
 
-  for (const kick of kicks) {
-    if (!checkCollision(rotated, piece.row, piece.col + kick)) {
+  for (const [dRow, dCol] of kicks) {
+    if (!checkCollision(rotated, piece.row + dRow, piece.col + dCol)) {
       piece.shape = rotated;
-      piece.col += kick;
+      piece.row += dRow;
+      piece.col += dCol;
+      tryResetLockDelay(); // 着地中の回転なら固定までの猶予を延長
       return;
     }
   }
   // どこにもずらせなければ回転しない
+}
+
+// ホールド：現在のテトリミノを取り置きして入れ替える。
+// 1ターン（次の固定まで）に1回しか使えない
+function holdPiece() {
+  if (gameState.hasHeldThisTurn) return; // このターンはもうホールド済み
+
+  const currentType = gameState.currentPiece.type;
+  const held = gameState.heldPiece;
+
+  // 現在のミノを取り置きする（形・位置は初期状態に戻す）
+  gameState.heldPiece = createPiece(currentType);
+
+  if (held === null) {
+    // 初回ホールド：取り置きだけして次のミノを出す
+    spawnPiece();
+  } else {
+    // 2回目以降：取り置きしていたミノと入れ替える
+    gameState.currentPiece = createPiece(held.type);
+    gameState.lockDelayElapsed = 0;
+    gameState.lockDelayResets = 0;
+  }
+
+  // spawnPiece() が false に戻すので、その後に true にする
+  gameState.hasHeldThisTurn = true;
 }
 
 // ============================================================
@@ -365,12 +417,53 @@ function drawBoard() {
   }
 }
 
+// NEXT・HOLD パネルにテトリミノを小さく描く（中央寄せ）
+function drawPreview(ctx, piece) {
+  const PANEL_SIZE = 100;
+  const cell = 20; // パネル内のマスは小さめにする
+
+  // パネルの背景をクリア
+  ctx.fillStyle = BOARD_BG_COLOR;
+  ctx.fillRect(0, 0, PANEL_SIZE, PANEL_SIZE);
+
+  if (piece === null || piece === undefined) return;
+
+  // ブロックがある範囲（上下左右の端）を調べて中央寄せの位置を計算する
+  let minR = piece.shape.length, maxR = -1, minC = piece.shape.length, maxC = -1;
+  for (let r = 0; r < piece.shape.length; r++) {
+    for (let c = 0; c < piece.shape[r].length; c++) {
+      if (piece.shape[r][c] === 0) continue;
+      if (r < minR) minR = r;
+      if (r > maxR) maxR = r;
+      if (c < minC) minC = c;
+      if (c > maxC) maxC = c;
+    }
+  }
+  const offsetX = (PANEL_SIZE - (maxC - minC + 1) * cell) / 2 - minC * cell;
+  const offsetY = (PANEL_SIZE - (maxR - minR + 1) * cell) / 2 - minR * cell;
+
+  for (let r = 0; r < piece.shape.length; r++) {
+    for (let c = 0; c < piece.shape[r].length; c++) {
+      if (piece.shape[r][c] === 0) continue;
+      const x = offsetX + c * cell;
+      const y = offsetY + r * cell;
+      ctx.fillStyle = piece.color;
+      ctx.fillRect(x, y, cell, cell);
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x + 1, y + 1, cell - 2, cell - 2);
+    }
+  }
+}
+
 // 1フレーム分の描画をまとめて行う
 function draw() {
   drawBoard();        // 背景とグリッド
   drawLockedCells();  // 積まれたブロック
   drawGhost();        // ゴースト（落下先の影）
   drawCurrentPiece(); // 落下中のブロック
+  drawPreview(nextCtx, gameState.nextPiece);  // NEXT パネル
+  drawPreview(holdCtx, gameState.heldPiece);  // HOLD パネル
 }
 
 // ============================================================
@@ -406,7 +499,7 @@ document.addEventListener('keydown', (event) => {
       break;
     case 'c':
     case 'C':
-      // ホールド（ステップ3bで実装する）
+      holdPiece();
       break;
   }
 });
@@ -436,6 +529,17 @@ function update(time) {
   if (gameState.dropElapsed >= BASE_DROP_INTERVAL) {
     gameState.dropElapsed = 0;
     stepDown();
+  }
+
+  // ロック遅延：着地中だけ経過時間をためて、500msたったら固定する。
+  // 空中にいる間は常に0に戻る（setTimeout を使わず rAF に一本化）
+  if (gameState.currentPiece !== null && isGrounded()) {
+    gameState.lockDelayElapsed += delta;
+    if (gameState.lockDelayElapsed >= LOCK_DELAY_MS) {
+      lockPiece();
+    }
+  } else {
+    gameState.lockDelayElapsed = 0;
   }
 
   draw();
