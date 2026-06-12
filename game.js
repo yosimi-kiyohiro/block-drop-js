@@ -467,12 +467,17 @@ function draw() {
 }
 
 // ============================================================
-// キーボード入力
+// 入力（キーボード＋タッチボタン共通）
 // ============================================================
+
+// 入力を受け付けてよい状態か
+function canControl() {
+  return !(gameState.isGameOver || gameState.isPaused || gameState.isAnimating);
+}
 
 document.addEventListener('keydown', (event) => {
   // ゲームオーバー・一時停止・演出中は操作を受け付けない
-  if (gameState.isGameOver || gameState.isPaused || gameState.isAnimating) {
+  if (!canControl()) {
     return;
   }
 
@@ -503,6 +508,90 @@ document.addEventListener('keydown', (event) => {
       break;
   }
 });
+
+// ------------------------------------------------------------
+// タッチボタン（pointerdown / pointerup でタッチとマウス共通）
+// ------------------------------------------------------------
+
+// 長押しタイマーを全部止めるための一覧（リスタート時にも使う）
+const repeatStoppers = [];
+
+// 「ポインタが枠の外に出ていたら止める」判定関数の一覧。
+// ボタン自身にイベントが届かないケースがあるため、ページ全体で監視する
+const repeatCheckers = [];
+
+// 長押しボタン：押した瞬間に1回動き、押しっぱなしで連続実行する
+function bindRepeatButton(id, action) {
+  const button = document.getElementById(id);
+  let timer = null;
+
+  const stop = () => {
+    if (timer !== null) {
+      clearInterval(timer);
+      timer = null;
+    }
+  };
+  repeatStoppers.push(stop);
+
+  button.addEventListener('pointerdown', (event) => {
+    event.preventDefault(); // スクロールなどブラウザの標準動作を止める
+    if (!canControl()) return;
+    action();
+    stop(); // 念のため古いタイマーを止めてから開始する
+    timer = setInterval(() => {
+      if (canControl()) action();
+    }, 130);
+  });
+  // 指を離した・ボタンの外に出た・OSに中断された時は必ず止める
+  button.addEventListener('pointerup', stop);
+  button.addEventListener('pointercancel', stop);
+  button.addEventListener('pointerleave', stop);
+
+  // ページ全体の監視用：押している間にポインタがボタンの枠の外に
+  // 出ていたら止める（座標で判定するのでブラウザの内部動作に依存しない）
+  repeatCheckers.push((x, y) => {
+    if (timer === null) return; // 押していない時は何もしない
+    const rect = button.getBoundingClientRect();
+    const inside =
+      x >= rect.left && x <= rect.right &&
+      y >= rect.top && y <= rect.bottom;
+    if (!inside) {
+      stop();
+    }
+  });
+  // 長押しで右クリックメニューが出るのを防ぐ
+  button.addEventListener('contextmenu', (event) => event.preventDefault());
+}
+
+// 単発ボタン：押した瞬間に1回だけ実行する
+function bindActionButton(id, action) {
+  const button = document.getElementById(id);
+  button.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    if (!canControl()) return;
+    action();
+  });
+  button.addEventListener('contextmenu', (event) => event.preventDefault());
+}
+
+bindRepeatButton('btn-left', () => movePiece(-1));
+bindRepeatButton('btn-right', () => movePiece(1));
+bindRepeatButton('btn-down', softDrop);
+bindActionButton('btn-rotate', rotatePiece);
+bindActionButton('btn-harddrop', hardDrop);
+bindActionButton('btn-hold', holdPiece);
+
+// 保険：ボタン自身にイベントが届かなくても、ページ全体なら必ず届く。
+// 指の移動のたびに「枠の外に出ていないか」を判定し、
+// どこで指を離しても・OSに中断されても全部の長押しを止める
+function stopAllRepeats() {
+  repeatStoppers.forEach((stop) => stop());
+}
+document.addEventListener('pointermove', (event) => {
+  repeatCheckers.forEach((check) => check(event.clientX, event.clientY));
+});
+document.addEventListener('pointerup', stopAllRepeats);
+document.addEventListener('pointercancel', stopAllRepeats);
 
 // ============================================================
 // ゲームループ（requestAnimationFrame に時間管理を一本化）

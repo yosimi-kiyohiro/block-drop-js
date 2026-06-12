@@ -119,6 +119,8 @@ body {
 .ctrl-btn {
   min-width: 56px;  /* 指で押しやすい最小サイズ（44px以上）を確保 */
   min-height: 56px;
+  /* ボタン上ではスクロール等のタッチ標準動作を完全に無効にする */
+  touch-action: none;
   font-size: 18px;
   font-weight: bold;
   border: none;
