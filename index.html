@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <!-- user-scalable=no と CSS の touch-action でダブルタップズームの誤爆を防ぐ -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>テトリス</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="game-container">
+
+    <!-- スコア・レベル・ライン数（スマホでは盤面の上に横並び） -->
+    <header class="status-bar">
+      <div class="status-item">スコア <span id="score">0</span></div>
+      <div class="status-item">レベル <span id="level">1</span></div>
+      <div class="status-item">ライン <span id="lines">0</span></div>
+    </header>
+
+    <!-- 盤面と左右のパネル（左：HOLD／右：NEXT） -->
+    <main class="play-area">
+      <aside class="side-panel">
+        <div class="panel-label">HOLD</div>
+        <canvas id="hold-canvas"></canvas>
+      </aside>
+
+      <div class="board-wrapper">
+        <canvas id="board-canvas"></canvas>
+        <!-- ゲームオーバー時に表示するオーバーレイ -->
+        <div id="overlay" class="overlay hidden">
+          <p id="overlay-message">ゲームオーバー</p>
+          <button id="restart-button">リスタート</button>
+        </div>
+      </div>
+
+      <aside class="side-panel">
+        <div class="panel-label">NEXT</div>
+        <canvas id="next-canvas"></canvas>
+      </aside>
+    </main>
+
+    <!-- タッチ操作ボタン（スマホで表示。左手：移動／右手：アクション） -->
+    <nav class="touch-controls">
+      <div class="button-group">
+        <button class="ctrl-btn" id="btn-left">←</button>
+        <button class="ctrl-btn" id="btn-right">→</button>
+        <button class="ctrl-btn" id="btn-down">↓</button>
+      </div>
+      <div class="button-group">
+        <button class="ctrl-btn" id="btn-rotate">回転</button>
+        <button class="ctrl-btn btn-big" id="btn-harddrop">HD</button>
+        <button class="ctrl-btn btn-hold" id="btn-hold">HOLD</button>
+      </div>
+    </nav>
+
+  </div>
+  <script src="game.js"></script>
+</body>
+</html>
