@@ -1,7 +1,9 @@
-# テトリス（JavaScript版）
+# Block Drop（JavaScript版）
 
-HTML / CSS / JavaScript（フレームワークなし）で作るテトリス。
+HTML / CSS / JavaScript（フレームワークなし）で作る、落ちものブロックパズルゲーム。
 プログラミング学習プロジェクト。後で C言語版を作って比較学習する予定。
+
+🎮 **ブラウザで遊ぶ：** https://yosimi-kiyohiro.github.io/block-drop-js/
 
 ## 遊び方
 

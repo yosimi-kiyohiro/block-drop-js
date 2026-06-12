@@ -855,7 +855,7 @@ function update(time) {
 
 function init() {
   gameState.board = createEmptyBoard();
-  showOverlay('テトリス', '▶ スタート'); // 開始前はスタート画面を出す
+  showOverlay('Block Drop', '▶ スタート'); // 開始前はスタート画面を出す
   requestAnimationFrame(update);
 }
 
