@@ -40,6 +40,9 @@ const BASE_DROP_INTERVAL = 1000;
 const LOCK_DELAY_MS = 500;
 const MAX_LOCK_DELAY_RESETS = 15;
 
+// ライン消去のスコア（同時に消した行数ごと。0行・1行・2行・3行・4行）
+const LINE_SCORES = [0, 100, 300, 500, 800];
+
 // ============================================================
 // ゲーム状態（すべての状態をここに集約する）
 // ============================================================
@@ -61,6 +64,7 @@ const gameState = {
   isAnimating: false,     // 演出中か（演出中は入力を無視する）
   lastTime: 0,            // 前フレームの時刻（rAF の時間管理用）
   dropElapsed: 0,         // 自動落下用にためた経過時間（ms）
+  isStarted: false,       // スタートボタンが押されてゲームが始まったか
 };
 
 // ============================================================
@@ -87,6 +91,14 @@ const nextCtx = setupCanvas(nextCanvas, 100, 100);
 
 const holdCanvas = document.getElementById('hold-canvas');
 const holdCtx = setupCanvas(holdCanvas, 100, 100);
+
+// スコア表示・オーバーレイなどの画面要素
+const scoreEl = document.getElementById('score');
+const levelEl = document.getElementById('level');
+const linesEl = document.getElementById('lines');
+const overlayEl = document.getElementById('overlay');
+const overlayMessageEl = document.getElementById('overlay-message');
+const overlayButtonEl = document.getElementById('overlay-button');
 
 // ============================================================
 // 盤面の初期化
@@ -146,7 +158,12 @@ function spawnPiece() {
   gameState.hasHeldThisTurn = false; // 新しいターンなのでホールド解禁
   gameState.lockDelayElapsed = 0;    // ロック遅延も新しいピース用にリセット
   gameState.lockDelayResets = 0;
-  // ※ スポーン位置が埋まっていたらゲームオーバー（ステップ4で実装）
+
+  // スポーン位置がすでに埋まっていたらゲームオーバー
+  const piece = gameState.currentPiece;
+  if (checkCollision(piece.shape, piece.row, piece.col)) {
+    gameOver();
+  }
 }
 
 // ============================================================
@@ -190,8 +207,37 @@ function lockPiece() {
       }
     }
   }
-  // ※ ライン消去はステップ4で実装する
+  clearLines(); // そろった行があれば消してスコアを加算する
   spawnPiece();
+}
+
+// そろった行を消して、スコア・レベルを更新する
+function clearLines() {
+  let cleared = 0;
+
+  // 下の行から上に向かって調べる。
+  // 行を消すと上の行が下に詰まってくるので、同じ行番号をもう一度調べ直す
+  for (let row = ROWS - 1; row >= 0; row--) {
+    const isFull = gameState.board[row].every((cell) => cell !== 0);
+    if (isFull) {
+      gameState.board.splice(row, 1);                   // そろった行を取り除く
+      gameState.board.unshift(new Array(COLS).fill(0)); // 一番上に空の行を足す
+      cleared++;
+      row++; // 詰まってきた行を調べ直す
+    }
+  }
+
+  if (cleared > 0) {
+    gameState.score += LINE_SCORES[cleared];
+    gameState.linesCleared += cleared;
+    // 10ライン消すごとにレベルアップ（0〜9ライン=Lv1、10〜19=Lv2…）
+    gameState.level = Math.floor(gameState.linesCleared / 10) + 1;
+  }
+}
+
+// 現在のレベルに応じた自動落下の間隔（レベルが上がるほど速い・最速100ms）
+function dropInterval() {
+  return Math.max(100, BASE_DROP_INTERVAL - (gameState.level - 1) * 100);
 }
 
 // テトリミノが着地しているか（1マス下に動けない状態か）
@@ -466,17 +512,31 @@ function draw() {
   drawPreview(holdCtx, gameState.heldPiece);  // HOLD パネル
 }
 
+// スコア・レベル・ライン数の画面表示を更新する
+function updateStatus() {
+  scoreEl.textContent = gameState.score;
+  levelEl.textContent = gameState.level;
+  linesEl.textContent = gameState.linesCleared;
+}
+
 // ============================================================
 // 入力（キーボード＋タッチボタン共通）
 // ============================================================
 
 // 入力を受け付けてよい状態か
 function canControl() {
-  return !(gameState.isGameOver || gameState.isPaused || gameState.isAnimating);
+  return gameState.isStarted &&
+    !(gameState.isGameOver || gameState.isPaused || gameState.isAnimating);
 }
 
 document.addEventListener('keydown', (event) => {
-  // ゲームオーバー・一時停止・演出中は操作を受け付けない
+  // 一時停止の切り替え（P / Esc）はプレイ中・一時停止中いつでも受け付ける
+  if (event.key === 'p' || event.key === 'P' || event.key === 'Escape') {
+    togglePause();
+    return;
+  }
+
+  // 開始前・ゲームオーバー・一時停止・演出中は操作を受け付けない
   if (!canControl()) {
     return;
   }
@@ -581,6 +641,18 @@ bindActionButton('btn-rotate', rotatePiece);
 bindActionButton('btn-harddrop', hardDrop);
 bindActionButton('btn-hold', holdPiece);
 
+// オーバーレイのボタン1つで「スタート・再開・リスタート」を受け持つ
+overlayButtonEl.addEventListener('click', () => {
+  if (gameState.isPaused) {
+    togglePause(); // 一時停止からの再開
+  } else {
+    startGame();   // 開始前のスタート／ゲームオーバー後のリスタート
+  }
+});
+
+// ⏸ ボタンで一時停止 ⇔ 再開
+document.getElementById('btn-pause').addEventListener('click', togglePause);
+
 // 保険：ボタン自身にイベントが届かなくても、ページ全体なら必ず届く。
 // 指の移動のたびに「枠の外に出ていないか」を判定し、
 // どこで指を離しても・OSに中断されても全部の長押しを止める
@@ -592,6 +664,67 @@ document.addEventListener('pointermove', (event) => {
 });
 document.addEventListener('pointerup', stopAllRepeats);
 document.addEventListener('pointercancel', stopAllRepeats);
+
+// ============================================================
+// ゲーム進行（スタート・一時停止・ゲームオーバー・リスタート）
+// ============================================================
+
+// 盤面に重ねるオーバーレイ（スタート・一時停止・ゲームオーバーで共用）
+function showOverlay(message, buttonLabel) {
+  overlayMessageEl.textContent = message;
+  overlayButtonEl.textContent = buttonLabel;
+  overlayEl.classList.remove('hidden');
+}
+
+function hideOverlay() {
+  overlayEl.classList.add('hidden');
+}
+
+// ゲームの状態をまっさらに戻す（後始末の一覧）
+function resetGame() {
+  stopAllRepeats();                     // ① 長押しタイマーを全部止める
+  gameState.board = createEmptyBoard(); // ② 盤面を空にする
+  gameState.bag = [];                   // ③ 7-bag を作り直す
+  gameState.currentPiece = null;
+  gameState.nextPiece = null;
+  gameState.heldPiece = null;
+  gameState.hasHeldThisTurn = false;
+  gameState.score = 0;                  // ④ スコア・レベル・ライン数を初期化
+  gameState.level = 1;
+  gameState.linesCleared = 0;
+  gameState.lockDelayElapsed = 0;       // ⑤ ロック遅延・落下の経過時間を初期化
+  gameState.lockDelayResets = 0;
+  gameState.dropElapsed = 0;
+  gameState.isGameOver = false;         // ⑥ フラグを初期化
+  gameState.isPaused = false;
+  spawnPiece();                         // ⑦ 最初のテトリミノを出す
+}
+
+// スタート（ゲームオーバー後のリスタートも同じ。まっさらにして開始）
+function startGame() {
+  resetGame();
+  gameState.isStarted = true;
+  hideOverlay();
+}
+
+// 一時停止 ⇔ 再開 を切り替える
+function togglePause() {
+  if (!gameState.isStarted || gameState.isGameOver) return;
+  gameState.isPaused = !gameState.isPaused;
+  if (gameState.isPaused) {
+    stopAllRepeats(); // 長押し中だったら止める
+    showOverlay('一時停止中', '▶ 再開');
+  } else {
+    hideOverlay();
+  }
+}
+
+// ゲームオーバー処理
+function gameOver() {
+  gameState.isGameOver = true;
+  stopAllRepeats();
+  showOverlay('ゲームオーバー', 'リスタート');
+}
 
 // ============================================================
 // ゲームループ（requestAnimationFrame に時間管理を一本化）
@@ -613,25 +746,33 @@ function update(time) {
     delta = 50;
   }
 
-  // 経過時間をためて、落下間隔を超えたら1マス落とす
-  gameState.dropElapsed += delta;
-  if (gameState.dropElapsed >= BASE_DROP_INTERVAL) {
-    gameState.dropElapsed = 0;
-    stepDown();
-  }
+  // ゲームが進行中の時だけ、落下とロック遅延の時間を進める
+  // （開始前・一時停止中・ゲームオーバー中は描画だけ続ける）
+  const isRunning =
+    gameState.isStarted && !gameState.isPaused && !gameState.isGameOver;
 
-  // ロック遅延：着地中だけ経過時間をためて、500msたったら固定する。
-  // 空中にいる間は常に0に戻る（setTimeout を使わず rAF に一本化）
-  if (gameState.currentPiece !== null && isGrounded()) {
-    gameState.lockDelayElapsed += delta;
-    if (gameState.lockDelayElapsed >= LOCK_DELAY_MS) {
-      lockPiece();
+  if (isRunning) {
+    // 経過時間をためて、落下間隔を超えたら1マス落とす
+    gameState.dropElapsed += delta;
+    if (gameState.dropElapsed >= dropInterval()) {
+      gameState.dropElapsed = 0;
+      stepDown();
     }
-  } else {
-    gameState.lockDelayElapsed = 0;
+
+    // ロック遅延：着地中だけ経過時間をためて、500msたったら固定する。
+    // 空中にいる間は常に0に戻る（setTimeout を使わず rAF に一本化）
+    if (gameState.currentPiece !== null && isGrounded()) {
+      gameState.lockDelayElapsed += delta;
+      if (gameState.lockDelayElapsed >= LOCK_DELAY_MS) {
+        lockPiece();
+      }
+    } else {
+      gameState.lockDelayElapsed = 0;
+    }
   }
 
   draw();
+  updateStatus();
   requestAnimationFrame(update);
 }
 
@@ -641,7 +782,7 @@ function update(time) {
 
 function init() {
   gameState.board = createEmptyBoard();
-  spawnPiece();
+  showOverlay('テトリス', '▶ スタート'); // 開始前はスタート画面を出す
   requestAnimationFrame(update);
 }
 

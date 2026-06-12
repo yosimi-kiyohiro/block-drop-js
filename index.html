@@ -15,6 +15,7 @@
       <div class="status-item">スコア <span id="score">0</span></div>
       <div class="status-item">レベル <span id="level">1</span></div>
       <div class="status-item">ライン <span id="lines">0</span></div>
+      <button id="btn-pause" title="一時停止（P / Esc）">⏸</button>
     </header>
 
     <!-- 盤面と左右のパネル（左：HOLD／右：NEXT） -->
@@ -26,10 +27,10 @@
 
       <div class="board-wrapper">
         <canvas id="board-canvas"></canvas>
-        <!-- ゲームオーバー時に表示するオーバーレイ -->
-        <div id="overlay" class="overlay hidden">
-          <p id="overlay-message">ゲームオーバー</p>
-          <button id="restart-button">リスタート</button>
+        <!-- スタート・一時停止・ゲームオーバーで使い回すオーバーレイ -->
+        <div id="overlay" class="overlay">
+          <p id="overlay-message">テトリス</p>
+          <button id="overlay-button">▶ スタート</button>
         </div>
       </div>
 

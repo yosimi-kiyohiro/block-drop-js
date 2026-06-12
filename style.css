@@ -100,7 +100,7 @@ body {
   display: none;
 }
 
-#restart-button {
+#overlay-button {
   font-size: 18px;
   padding: 10px 24px;
   border: none;
@@ -108,6 +108,22 @@ body {
   background-color: #ffd866;
   color: #1a1a2e;
   cursor: pointer;
+}
+
+/* 一時停止ボタン（スコア表示の横の小さなボタン） */
+#btn-pause {
+  min-width: 36px;
+  min-height: 36px;
+  font-size: 16px;
+  border: none;
+  border-radius: 8px;
+  background-color: #44446a;
+  color: #e0e0f0;
+  cursor: pointer;
+}
+
+#btn-pause:active {
+  background-color: #6868a0;
 }
 
 /* -- タッチ操作ボタン ------------------------------------------ */
