@@ -198,6 +198,70 @@ function stepDown() {
 }
 
 // ============================================================
+// 操作（移動・回転・ドロップ）
+// ============================================================
+
+// 左右に1マス動かす（dCol：-1 = 左、+1 = 右）
+function movePiece(dCol) {
+  const piece = gameState.currentPiece;
+  if (!checkCollision(piece.shape, piece.row, piece.col + dCol)) {
+    piece.col += dCol;
+  }
+}
+
+// ソフトドロップ：1マス下に落とす（自動落下のタイマーもリセット）
+function softDrop() {
+  stepDown();
+  gameState.dropElapsed = 0;
+}
+
+// ハードドロップ：一番下まで一気に落として即固定する
+// （ロック遅延はスキップする仕様。ぶれ演出はステップ5で追加）
+function hardDrop() {
+  const piece = gameState.currentPiece;
+  while (!checkCollision(piece.shape, piece.row + 1, piece.col)) {
+    piece.row++;
+  }
+  lockPiece();
+  gameState.dropElapsed = 0;
+}
+
+// 行列を時計回りに90度回転する（転置＋行の反転と同じ結果）
+// rotated[r][c] = shape[size-1-c][r] という対応になる
+function rotateMatrix(shape) {
+  const size = shape.length;
+  const rotated = [];
+  for (let r = 0; r < size; r++) {
+    rotated.push([]);
+    for (let c = 0; c < size; c++) {
+      rotated[r].push(shape[size - 1 - c][r]);
+    }
+  }
+  return rotated;
+}
+
+// テトリミノを回転する。壁際で回転できない時は左右に
+// 少しずらして試す（簡易ウォールキック）
+function rotatePiece() {
+  const piece = gameState.currentPiece;
+  if (piece.type === 'O') return; // Oミノは回転しても形が同じ
+
+  const rotated = rotateMatrix(piece.shape);
+
+  // ずらして試す量。Iミノは横に長いので2マスずらしも試す
+  const kicks = piece.type === 'I' ? [0, -1, 1, -2, 2] : [0, -1, 1];
+
+  for (const kick of kicks) {
+    if (!checkCollision(rotated, piece.row, piece.col + kick)) {
+      piece.shape = rotated;
+      piece.col += kick;
+      return;
+    }
+  }
+  // どこにもずらせなければ回転しない
+}
+
+// ============================================================
 // 描画
 // ============================================================
 
@@ -219,6 +283,47 @@ function drawLockedCells() {
       if (gameState.board[row][col] !== 0) {
         drawCell(boardCtx, row, col, gameState.board[row][col]);
       }
+    }
+  }
+}
+
+// ゴースト（落下先の影）の行位置を計算する。
+// 現在の位置から衝突するまで1マスずつ下にたどる
+function getGhostRow() {
+  const piece = gameState.currentPiece;
+  let row = piece.row;
+  while (!checkCollision(piece.shape, row + 1, piece.col)) {
+    row++;
+  }
+  return row;
+}
+
+// ゴーストを描く（半透明の塗り＋輪郭線で本体と区別する）
+function drawGhost() {
+  const piece = gameState.currentPiece;
+  if (piece === null) return;
+
+  const ghostRow = getGhostRow();
+  if (ghostRow === piece.row) return; // 本体と重なる時は描かない
+
+  for (let r = 0; r < piece.shape.length; r++) {
+    for (let c = 0; c < piece.shape[r].length; c++) {
+      if (piece.shape[r][c] === 0) continue;
+      if (ghostRow + r < 0) continue;
+
+      const x = (piece.col + c) * CELL_SIZE;
+      const y = (ghostRow + r) * CELL_SIZE;
+
+      // 半透明の塗り
+      boardCtx.globalAlpha = 0.25;
+      boardCtx.fillStyle = piece.color;
+      boardCtx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+      boardCtx.globalAlpha = 1;
+
+      // 輪郭線
+      boardCtx.strokeStyle = piece.color;
+      boardCtx.lineWidth = 1;
+      boardCtx.strokeRect(x + 1.5, y + 1.5, CELL_SIZE - 3, CELL_SIZE - 3);
     }
   }
 }
@@ -264,8 +369,47 @@ function drawBoard() {
 function draw() {
   drawBoard();        // 背景とグリッド
   drawLockedCells();  // 積まれたブロック
+  drawGhost();        // ゴースト（落下先の影）
   drawCurrentPiece(); // 落下中のブロック
 }
+
+// ============================================================
+// キーボード入力
+// ============================================================
+
+document.addEventListener('keydown', (event) => {
+  // ゲームオーバー・一時停止・演出中は操作を受け付けない
+  if (gameState.isGameOver || gameState.isPaused || gameState.isAnimating) {
+    return;
+  }
+
+  switch (event.key) {
+    case 'ArrowLeft':
+      event.preventDefault(); // 矢印キーで画面がスクロールするのを防ぐ
+      movePiece(-1);
+      break;
+    case 'ArrowRight':
+      event.preventDefault();
+      movePiece(1);
+      break;
+    case 'ArrowDown':
+      event.preventDefault();
+      softDrop();
+      break;
+    case 'ArrowUp':
+      event.preventDefault();
+      rotatePiece();
+      break;
+    case ' ': // スペースキー
+      event.preventDefault();
+      hardDrop();
+      break;
+    case 'c':
+    case 'C':
+      // ホールド（ステップ3bで実装する）
+      break;
+  }
+});
 
 // ============================================================
 // ゲームループ（requestAnimationFrame に時間管理を一本化）
